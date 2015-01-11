@@ -1,0 +1,99 @@
+---
+title: "Activity Prediction"
+output: html_document
+---
+
+##Summary
+The purpose of this analysis is to try and predict how effective people are when doing exercises. For this task I will be using the weight lifting exercises dataset generously provided [here](http://groupware.les.inf.puc-rio.br/har). Subjects were hooked up to several monitors and asked to perform weight lifting exercises in five different ways(categorized "A", "B", "C", "D", "E" in the classe variable) while being monitored by an instructor to make sure they were performing them in the manner specified. Of these, only "A" corresponds to performing the exercise correctly. The remaining categories are incorrect in different ways, but consistent within category. For more information please visit the link provided above. I will build models in order to try and predict in which manner the subjects performed the exercises by using the monitor data as the predictors and the classe variable as the outcome.
+
+##Preprocessing Data
+```{r Loading Libraries}
+library(caret)
+library(randomForest)
+library(rpart)
+```
+
+Loading the data:
+```{r Loading and Splitting Data}
+training <- read.csv("pml-training.csv")
+set.seed(123)
+inTraining <- createDataPartition(training$classe,p=.6,list=FALSE)
+verification <- training[-inTraining,]
+training <- training[inTraining,]
+```
+
+I split up the training set further into a training and verification set. The verification set I will not touch until after the models have been built so I can get an estimate for my out of sample error for each model. Then I will choose a model based on the best accuracy.
+
+Let's take a look at the dimensions of our data:
+```{r Dims}
+dim(training)
+```
+
+It looks like there are 159 potential predictors I have to consider. I'm going to try and prune these variables so that I don't have to fit according to all of them. 
+
+For the first round of pruning I will see which variables have the lows variance, and would therefore be poor predictors. The function nearZeroVar in the caret package does this well.
+
+```{r}
+nzv <- nearZeroVar(training,saveMetrics=TRUE)
+sum(nzv$nzv)
+```
+
+There are 53 predictors I can get rid of right off the bat. Now I will create the new training set with only the more variable predictors. I am also taking out the predictor X, since it is the index and classe is highly dependent on the index in the training set.
+
+```{r}
+training2 <- subset(training,select=!nzv$nzv)
+training2 <- subset(training2,select=-X)
+```
+
+Now I will check to see how many NAs there are in the data.
+
+```{r checking NAs}
+sum(is.na(training2))/(dim(training2)[1] * dim(training2)[2])
+```
+
+There are quite a bit of NAs in the dataset, almost 45% of the data are NAs! This is not good for building models and I need to find a way to remove them. By looking at how many NAs appear in each column I will decide if I should try and replace the NAs(if they are distributed across the predictors) or if there are some columns that need to be omitted altogether(if the columns are mostly comprised of NAs).
+
+```{r Removing Too many NAs}
+nas <- apply(training2,2,is.na)
+num.NAs <- apply(nas,2,sum)
+too.Many.NAs <- num.NAs/dim(training2)[1] > .9
+sum(too.Many.NAs)
+training3 <- subset(training2,select=!too.Many.NAs)
+sum(is.na(training3))
+```
+
+There are 48 columns with over 90% NAs, so I get rid of these as they will not help in prediction. Since all of the NAs were in the columns with over 90% NAs, this method has also gotten rid of all of the NAs.
+
+I also noticed that the first four columns are timestamp information and names of the subjects. Since I want to create a model that tries to extract how well the subjects did based on the monitor information(not on when they did the exercise or who did it) I will also omit these columns.
+```{r}
+training4 <- training3[,5:58]
+dim(training4)[2]
+```
+
+Now I am left with 53 predictors, down from the original 159. Much better!
+
+##Building the models
+
+Now I will build 3 models: rpart, lda, and random forest. Then I will apply all three to the verification set I built earlier to get an estimate of the out of sample accuracy. I will select the model with the best accuracy.
+```{r rpart model}
+mod.rpart <- rpart(classe~.,data=training4)
+predict.rpart <- predict(mod.rpart,verification,type="class")
+accuracy.rpart <- confusionMatrix(predict.rpart,verification$classe)$overall[1]
+accuracy.rpart
+```
+
+```{r lda model}
+mod.lda <- train(classe~.,data=training4,method="lda")
+predict.lda <- predict(mod.lda,verification)
+accuracy.lda <- confusionMatrix(predict.lda,verification$classe)$overall[1]
+accuracy.lda
+```
+
+```{r random forest model,cache=TRUE}
+mod.rf <- randomForest(classe~.,data=training4)
+predict.rf <- predict(mod.rf,verification)
+accuracy.rf <- confusionMatrix(predict.rf,verification$classe)$overall[1]
+accuracy.rf
+```
+
+Random Forest gives a prediction of the out of sample accuracy as 99%, so this is the one I will use.
